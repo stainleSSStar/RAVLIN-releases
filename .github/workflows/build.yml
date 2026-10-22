@@ -111,6 +111,9 @@ jobs:
               eof       { puts "\n=== CHECK 1 FAILED: qemu exited ==="; exit 1 }
           }
 
+          # post-boot checks fail fast; fish wraps command echoes in ANSI
+          # escapes, so match only contiguous output substrings
+          set timeout 60
           send "root\r"
           expect "Password:"
           send "voidlinux\r"
@@ -138,14 +141,14 @@ jobs:
           # 5. RAVLIN identity survived into the image
           send "grep PRETTY /etc/os-release\r"
           expect {
-              "PRETTY_NAME=\"RAVLIN 0.1.0\"" { puts "\n=== CHECK 5 PASSED: RAVLIN os-release ===" }
+              "_NAME=\"RAVLIN 0.1.0\"" { puts "\n=== CHECK 5 PASSED: RAVLIN os-release ===" }
               timeout { puts "\n=== CHECK 5 FAILED: os-release wrong ==="; exit 1 }
           }
 
           # 6. network + sound tooling present on the live image
           send "command -v wpa_supplicant; and command -v alsamixer\r"
           expect {
-              "alsamixer" { puts "\n=== CHECK 6 PASSED: wifi + sound tooling present ===" }
+              "/usr/bin/alsamixer" { puts "\n=== CHECK 6 PASSED: wifi + sound tooling present ===" }
               timeout { puts "\n=== CHECK 6 FAILED: tooling missing ==="; exit 1 }
           }
 

@@ -1,0 +1,88 @@
+name: Build RAVLIN ISO
+
+on:
+  workflow_dispatch:
+    inputs:
+      release:
+        description: "Also publish a GitHub release with the built ISO"
+        default: false
+        required: true
+        type: boolean
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ravlin-iso-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build live ISO
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    # Same privileged Void container pattern void-mklive uses in its own CI.
+    # --privileged is required: mklive bind-mounts /proc /sys /dev while
+    # assembling the rootfs.
+    container:
+      image: "ghcr.io/void-linux/void-mklive:20250116R1"
+      options: --privileged
+      volumes:
+        - /dev:/dev
+      env:
+        PATH: "/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/sbin:/usr/local/bin:/tmp/bin"
+
+    steps:
+      - name: Prepare container
+        shell: sh
+        run: xbps-install -Syu xbps && xbps-install -yu
+
+      - name: Checkout RAVLIN
+        uses: classabbyamp/treeless-checkout-action@v1
+
+      - name: Build ISO
+        run: bash build.sh --native
+
+      - name: Compute checksums
+        run: |
+          sha256sum ravlin-live-*.iso | tee sha256sum.txt
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ravlin-iso
+          path: |
+            ravlin-live-*.iso
+            sha256sum.txt
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    runs-on: ubuntu-latest
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.release == true
+
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ravlin-iso
+
+      # By default the release is published on this repository. To publish
+      # into a separate releases repository instead, set these two secrets:
+      #   RELEASES_REPO  - e.g. "stainleSSStar/RAVLIN-releases"
+      #   RELEASES_TOKEN - a PAT with contents:write on that repository
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ravlin-live-*.iso
+            sha256sum.txt
+          generate_release_notes: true
+          make_latest: true
+          repository: ${{ secrets.RELEASES_REPO || github.repository }}
+          token: ${{ secrets.RELEASES_TOKEN || secrets.GITHUB_TOKEN }}

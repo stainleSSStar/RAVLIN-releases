@@ -40,6 +40,20 @@ RAVLIN_MIRROR=https://repo-default.voidlinux.org/current bash build.sh  # pick a
 MKLIVE_REF=master bash build.sh                                          # track upstream mklive
 ```
 
+### CI builds and releases
+
+No local tooling needed — the repo ships a GitHub Actions workflow (`.github/workflows/build.yml`) that builds the ISO in the same privileged Void container void-mklive uses for its own CI, and can publish a release:
+
+- **Manual build:** GitHub → *Actions* → *Build RAVLIN ISO* → *Run workflow*. Tick **"Also publish a GitHub release"** to publish the ISO as a release in one go.
+- **Tag build:** push a tag like `v0.1.0` — the ISO is built and released automatically (`v*` tags trigger the release job).
+
+Every release ships the ISO plus a `sha256sum.txt`. By default releases land on this repository's *Releases* page, which works with the built-in `GITHUB_TOKEN` and zero configuration. To publish into a separate releases repository instead, add two repository secrets:
+
+| Secret | Value |
+|---|---|
+| `RELEASES_REPO` | e.g. `stainleSSStar/RAVLIN-releases` |
+| `RELEASES_TOKEN` | a personal access token with `contents:write` on that repo |
+
 ### Repository layout
 
 ```

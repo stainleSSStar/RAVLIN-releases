@@ -20,12 +20,17 @@ for svc in dhcpcd wpa_supplicant acpid; do
 done
 
 echo "ravlin-ci: serial console for the boot test"
-if [ ! -d /etc/sv/agetty-serial ]; then
-    mkdir -p /etc/sv/agetty-serial
-    printf '#!/bin/sh\nexec agetty 115200 ttyS0\n' > /etc/sv/agetty-serial/run
-    chmod 755 /etc/sv/agetty-serial/run
+# Note: the stock agetty-serial service derives the tty from its own
+# directory name (tty=${PWD##*-}) and would try to open a device called
+# "serial". The correct service for the serial port is agetty-ttyS0.
+if [ -d /etc/sv/agetty-ttyS0 ]; then
+    ln -sf /etc/sv/agetty-ttyS0 /etc/runit/runsvdir/default/agetty-ttyS0
+else
+    mkdir -p /etc/sv/agetty-ttyS0
+    printf '#!/bin/sh\nexec agetty -L ttyS0 115200 vt100\n' > /etc/sv/agetty-ttyS0/run
+    chmod 755 /etc/sv/agetty-ttyS0/run
+    ln -sf /etc/sv/agetty-ttyS0 /etc/runit/runsvdir/default/agetty-ttyS0
 fi
-ln -sf /etc/sv/agetty-serial /etc/runit/runsvdir/default/agetty-serial
 
 echo "ravlin-ci: serial console on the installed kernel cmdline"
 echo 'GRUB_CMDLINE_LINUX="console=ttyS0"' >> /etc/default/grub

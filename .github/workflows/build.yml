@@ -62,10 +62,111 @@ jobs:
             sha256sum.txt
           if-no-files-found: error
 
+  smoke-test:
+    name: Boot test (QEMU)
+    runs-on: ubuntu-latest
+    needs: build
+    timeout-minutes: 30
+
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ravlin-iso
+
+      - name: Install QEMU and expect
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq qemu-system-x86 expect xorriso
+
+      - name: Extract kernel and initramfs from the ISO
+        run: |
+          xorriso -osirrox on -indev "$(ls ravlin-live-*.iso)" -extract /boot isoboot
+          ls -lh isoboot/vmlinuz isoboot/initrd
+
+      # Boots the live ISO headless in QEMU (software emulation — GitHub
+      # runners have no KVM), logs in over the serial console with expect,
+      # and asserts the RAVLIN specifics. The kernel cmdline mirrors the
+      # ISO's default GRUB entry plus console=ttyS0 for the serial login.
+      - name: Boot the live ISO and verify the session
+        env:
+          KAPPEND: >-
+            root=live:CDLABEL=VOID_LIVE ro init=/sbin/init
+            rd.luks=0 rd.md=0 rd.dm=0 loglevel=4 gpt add_efi_memmap
+            vconsole.unicode=1 vconsole.keymap=us locale.LANG=en_US.UTF-8
+            rd.overlayfs=1 live.shell=/usr/bin/fish console=ttyS0
+        run: |
+          cat > smoke.exp <<'EOF'
+          set timeout 900
+          log_file -noappend serial.log
+          spawn qemu-system-x86_64 -m 3072 -smp 2 -nographic -no-reboot \
+            -kernel isoboot/vmlinuz -initrd isoboot/initrd -append "$env(KAPPEND)" \
+            -cdrom [glob ravlin-live-*.iso]
+
+          # 1. boot reaches the login prompt
+          expect {
+              "login:"  { puts "\n=== CHECK 1 PASSED: login prompt ===" }
+              timeout   { puts "\n=== CHECK 1 FAILED: boot timeout ==="; exit 1 }
+              eof       { puts "\n=== CHECK 1 FAILED: qemu exited ==="; exit 1 }
+          }
+
+          send "root\r"
+          expect "Password:"
+          send "voidlinux\r"
+
+          # 2. root lands in fish with the RAVLIN config (greeting is unique to it)
+          expect {
+              "minimal Void Linux remix" { puts "\n=== CHECK 2 PASSED: fish + RAVLIN config ===" }
+              timeout { puts "\n=== CHECK 2 FAILED: no fish greeting ==="; exit 1 }
+          }
+
+          # 3. root's login shell is really fish
+          send "status fish-path\r"
+          expect {
+              "/usr/bin/fish" { puts "\n=== CHECK 3 PASSED: root shell is fish ===" }
+              timeout { puts "\n=== CHECK 3 FAILED: shell is not fish ==="; exit 1 }
+          }
+
+          # 4. the interactive console installer is on the image
+          send "command -v void-installer\r"
+          expect {
+              "/usr/bin/void-installer" { puts "\n=== CHECK 4 PASSED: void-installer present ===" }
+              timeout { puts "\n=== CHECK 4 FAILED: void-installer missing ==="; exit 1 }
+          }
+
+          # 5. RAVLIN identity survived into the image
+          send "grep PRETTY /etc/os-release\r"
+          expect {
+              "PRETTY_NAME=\"RAVLIN 0.1.0\"" { puts "\n=== CHECK 5 PASSED: RAVLIN os-release ===" }
+              timeout { puts "\n=== CHECK 5 FAILED: os-release wrong ==="; exit 1 }
+          }
+
+          # 6. network + sound tooling present on the live image
+          send "command -v wpa_supplicant; and command -v alsamixer\r"
+          expect {
+              "alsamixer" { puts "\n=== CHECK 6 PASSED: wifi + sound tooling present ===" }
+              timeout { puts "\n=== CHECK 6 FAILED: tooling missing ==="; exit 1 }
+          }
+
+          puts "\n=== ALL SMOKE CHECKS PASSED ==="
+          send "\001x"
+          expect eof
+          EOF
+          expect smoke.exp
+          echo "serial log tail:" && tail -20 serial.log || true
+
+      - name: Upload serial log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-serial-log
+          path: serial.log
+          if-no-files-found: ignore
+
   release:
     name: Publish release
     runs-on: ubuntu-latest
-    needs: build
+    needs: smoke-test
     if: startsWith(github.ref, 'refs/tags/v') || inputs.release == true
 
     steps:

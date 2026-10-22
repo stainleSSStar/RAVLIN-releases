@@ -1,0 +1,10 @@
+NAME="RAVLIN"
+VERSION="0.1.0"
+ID=ravlin
+ID_LIKE=voidlinux
+PRETTY_NAME="RAVLIN 0.1.0"
+VERSION_ID="0.1.0"
+HOME_URL="https://github.com/stainleSSStar/RAVLIN"
+DOCUMENTATION_URL="https://docs.voidlinux.org"
+BUG_REPORT_URL="https://github.com/stainleSSStar/RAVLIN/issues"
+ANSI_COLOR="0;36"

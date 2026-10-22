@@ -1,0 +1,32 @@
+# RAVLIN live ISO package list (installed on top of Void's base-system).
+# One package per line; lines starting with # and blank lines are ignored.
+
+# --- shell ---------------------------------------------------------------
+# The default interactive shell for root and new users. Note that bash and
+# dash stay installed: they come with base-system and most system scripts
+# (including void-installer) rely on them.
+fish
+
+# --- installer -----------------------------------------------------------
+# TUI library used by void-installer, the interactive console installer.
+dialog
+
+# --- drivers: wifi + LAN --------------------------------------------------
+# Network firmware blobs (Atheros, Broadcom, Intel iwlwifi, Realtek, ...).
+# Ethernet and wifi drivers themselves live in the kernel; base-system also
+# ships wifi-firmware, wpa_supplicant, iw and dhcpcd already.
+linux-firmware-network
+
+# --- drivers: sound -------------------------------------------------------
+# ALSA mixer/tools, firmware for Sound Open Firmware devices (modern Intel
+# laptops), and ALSA UCM profiles for correct routing on such hardware.
+alsa-utils
+sof-firmware
+alsa-ucm-conf
+
+# --- bootloader -----------------------------------------------------------
+# void-installer installs GRUB to the target from the live environment
+# (BIOS or EFI, including 32-bit EFI firmware found on older machines).
+grub
+grub-i386-efi
+grub-x86_64-efi

@@ -1,0 +1,12 @@
+Welcome to the RAVLIN live session!
+
+  * install RAVLIN to disk:  void-installer
+    (interactive console installer: keyboard, locale, timezone, users,
+    partitioning, bootloader — it walks you through everything)
+
+  * networking: dhcpcd and wpa_supplicant are running; wifi can be
+    configured from the installer's Network menu
+
+  * this session runs the fish shell: `help`, or `man fish`
+
+RAVLIN is a minimal remix of Void Linux. https://www.voidlinux.org

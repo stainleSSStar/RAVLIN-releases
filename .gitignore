@@ -1,0 +1,7 @@
+# build artifacts
+build/
+*.iso
+xbps-cachedir-*/
+
+# generated from void-mklive's installer.sh at build time
+rootfs/usr/bin/void-installer

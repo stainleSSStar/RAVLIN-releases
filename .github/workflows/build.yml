@@ -76,9 +76,19 @@ jobs:
 
       - name: Install QEMU and expect
         run: |
-          timeout 480 sudo apt-get update -qq -o Acquire::Retries=5
-          timeout 480 sudo apt-get install -y -qq -o Acquire::Retries=5 \
-            qemu-system-x86 expect xorriso
+          # azure apt mirrors on GH runners occasionally hang; fail fast at
+          # the connection level, then retry the whole step
+          APT_OPTS="-o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30"
+          for i in 1 2 3; do
+            echo "== apt attempt $i =="
+            if timeout 480 sudo apt-get update -qq $APT_OPTS && \
+               timeout 480 sudo apt-get install -y -qq $APT_OPTS \
+                 qemu-system-x86 expect xorriso; then
+              exit 0
+            fi
+            sleep 15
+          done
+          echo "apt failed after 3 attempts"; exit 1
 
       - name: Extract kernel and initramfs from the ISO
         run: |

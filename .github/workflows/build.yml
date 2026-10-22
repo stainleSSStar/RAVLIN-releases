@@ -22,7 +22,7 @@ concurrency:
 jobs:
   build:
     name: Build live ISO
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 90
 
     # Same privileged Void container pattern void-mklive uses in its own CI.
@@ -64,7 +64,7 @@ jobs:
 
   smoke-test:
     name: Boot test (QEMU)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: build
     timeout-minutes: 30
 
@@ -179,7 +179,7 @@ jobs:
 
   install-test:
     name: Install test (unattended install + boot)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: build
     timeout-minutes: 75
 
@@ -332,7 +332,7 @@ jobs:
 
   release:
     name: Publish release
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [smoke-test, install-test]
     if: startsWith(github.ref, 'refs/tags/v') || inputs.release == true
 

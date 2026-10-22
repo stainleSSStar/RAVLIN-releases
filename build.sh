@@ -84,7 +84,8 @@ run_native() {
         -x "$POSTSETUP" \
         -T "RAVLIN" \
         -C "$KCMDLINE" \
-        -r "$MIRROR")
+        -r "$MIRROR") || die "mklive.sh failed"
+    [ -f "$SCRIPT_DIR/$ISO_NAME" ] || die "expected ISO was not produced: $SCRIPT_DIR/$ISO_NAME"
     log "Done: $SCRIPT_DIR/$ISO_NAME"
 }
 

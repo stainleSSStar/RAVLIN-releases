@@ -2,10 +2,11 @@
 # One package per line; lines starting with # and blank lines are ignored.
 
 # --- shell ---------------------------------------------------------------
-# The default interactive shell for root and new users. Note that bash and
-# dash stay installed: they come with base-system and most system scripts
+# The default interactive shell for root and new users. The Void package is
+# named "fish-shell"; the binary is /usr/bin/fish. Note that bash and dash
+# stay installed: they come with base-system and most system scripts
 # (including void-installer) rely on them.
-fish
+fish-shell
 
 # --- installer -----------------------------------------------------------
 # TUI library used by void-installer, the interactive console installer.

@@ -177,10 +177,163 @@ jobs:
           path: serial.log
           if-no-files-found: ignore
 
+  install-test:
+    name: Install test (unattended install + boot)
+    runs-on: ubuntu-latest
+    needs: build
+    timeout-minutes: 75
+
+    steps:
+      - name: Checkout RAVLIN
+        uses: actions/checkout@v4
+
+      - name: Download ISO artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ravlin-iso
+
+      - name: Install QEMU and expect
+        run: |
+          APT_OPTS="-o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30"
+          for i in 1 2 3; do
+            echo "== apt attempt $i =="
+            if timeout 480 sudo apt-get update -qq $APT_OPTS && \
+               timeout 480 sudo apt-get install -y -qq $APT_OPTS \
+                 qemu-system-x86 qemu-utils expect xorriso; then
+              exit 0
+            fi
+            sleep 15
+          done
+          echo "apt failed after 3 attempts"; exit 1
+
+      - name: Extract kernel and initramfs from the ISO
+        run: |
+          xorriso -osirrox on -indev "$(ls ravlin-live-*.iso)" -extract /boot isoboot
+          ls -lh isoboot/vmlinuz isoboot/initrd
+
+      # The live image's built-in autoinstaller (dracut module, included by
+      # void-mklive) performs an unattended network install onto a blank disk
+      # when booted with root=vai auto=1 autourl=... It installs base-system
+      # plus the RAVLIN package set, then our postinstall applies branding
+      # (fish shells, os-release, services) inside the fresh install.
+      - name: Serve answer file and branding over HTTP
+        run: |
+          mkdir -p serve
+          cp ci/autoinstall.cfg ci/postinstall.sh ci/postinstall-chroot.sh serve/
+          cp -r rootfs/. serve/
+          ls -R serve | head -40
+          (python3 -m http.server 8000 --directory serve >/tmp/httpd.log 2>&1 &)
+          sleep 2
+          curl -fsS http://127.0.0.1:8000/autoinstall.cfg >/dev/null && echo "http server up"
+
+      - name: Create blank target disk
+        run: qemu-img create -f raw disk.img 8G
+
+      - name: Run unattended install onto the disk
+        run: |
+          cat > install.exp <<'EOF'
+          set timeout 2700
+          log_file -noappend install-serial.log
+          spawn qemu-system-x86_64 -m 3072 -smp 2 -nographic -no-reboot \
+            -nic user,model=virtio-net-pci \
+            -kernel isoboot/vmlinuz -initrd isoboot/initrd \
+            -append "root=vai auto=1 autourl=http://10.0.2.2:8000/autoinstall.cfg console=ttyS0" \
+            -cdrom [glob ravlin-live-*.iso] \
+            -drive file=disk.img,format=raw,if=virtio
+
+          expect {
+              "RAVLIN_POSTINSTALL_DONE" { puts "\n=== INSTALL PASSED ===" }
+              timeout { puts "\n=== INSTALL FAILED: timeout ==="; exit 1 }
+              eof     { puts "\n=== INSTALL FAILED: qemu exited ==="; exit 1 }
+          }
+
+          send "\001x"
+          expect eof
+          EOF
+          expect install.exp
+          test -s disk.img
+          qemu-img info disk.img | head -5
+
+      # Phase 2: boot the freshly installed disk (no ISO attached) and
+      # verify the installed system.
+      - name: Boot the installed disk and verify
+        run: |
+          cat > verify.exp <<'EOF'
+          set timeout 900
+          log_file -noappend verify-serial.log
+          spawn qemu-system-x86_64 -m 2048 -smp 2 -nographic -no-reboot \
+            -nic user,model=virtio-net-pci \
+            -drive file=disk.img,format=raw,if=virtio
+
+          # 1. installed system reaches a login prompt
+          expect {
+              "login:" { puts "\n=== CHECK 1 PASSED: installed system boots ===" }
+              timeout { puts "\n=== CHECK 1 FAILED: boot timeout ==="; exit 1 }
+              eof     { puts "\n=== CHECK 1 FAILED: qemu exited ==="; exit 1 }
+          }
+
+          send "ravlin\r"
+          expect "Password:"
+          send "ravlin-ci\r"
+
+          # 2. CI user's login shell is fish with the RAVLIN config
+          expect {
+              "minimal Void Linux remix" { puts "\n=== CHECK 2 PASSED: user shell is fish ===" }
+              timeout { puts "\n=== CHECK 2 FAILED: no fish session ==="; exit 1 }
+          }
+
+          # 3. the system is booted from the installed disk, not the ISO
+          send "mount | grep \" / \"\r"
+          expect {
+              "vda1" { puts "\n=== CHECK 3 PASSED: booted from disk ===" }
+              timeout { puts "\n=== CHECK 3 FAILED: not booted from disk ==="; exit 1 }
+          }
+
+          # 4. RAVLIN identity on the installed system
+          send "grep PRETTY /etc/os-release\r"
+          expect {
+              "_NAME=\"RAVLIN 0.1.0\"" { puts "\n=== CHECK 4 PASSED: RAVLIN os-release ===" }
+              timeout { puts "\n=== CHECK 4 FAILED: os-release wrong ==="; exit 1 }
+          }
+
+          # 5. expected services enabled
+          send "ls /var/service/\r"
+          expect {
+              "dhcpcd" { puts "\n=== CHECK 5 PASSED: dhcpcd enabled ===" }
+              timeout { puts "\n=== CHECK 5 FAILED: services not enabled ==="; exit 1 }
+          }
+          expect {
+              "wpa_supplicant" { puts "\n=== CHECK 5b PASSED: wpa_supplicant enabled ===" }
+              timeout { puts "\n=== CHECK 5b FAILED: wpa_supplicant not enabled ==="; exit 1 }
+          }
+
+          # 6. RAVLIN package set present on the installed system
+          send "command -v alsamixer\r"
+          expect {
+              "/usr/bin/alsamixer" { puts "\n=== CHECK 6 PASSED: sound tooling installed ===" }
+              timeout { puts "\n=== CHECK 6 FAILED: tooling missing ==="; exit 1 }
+          }
+
+          puts "\n=== ALL INSTALL CHECKS PASSED ==="
+          send "\001x"
+          expect eof
+          EOF
+          expect verify.exp
+
+      - name: Upload serial logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: install-serial-logs
+          path: |
+            install-serial.log
+            verify-serial.log
+          if-no-files-found: ignore
+
   release:
     name: Publish release
     runs-on: ubuntu-latest
-    needs: smoke-test
+    needs: [smoke-test, install-test]
     if: startsWith(github.ref, 'refs/tags/v') || inputs.release == true
 
     steps:

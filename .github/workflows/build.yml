@@ -62,13 +62,16 @@ jobs:
             sha256sum.txt
           if-no-files-found: error
 
-  smoke-test:
-    name: Boot test (QEMU)
+  qa:
+    name: QA (live boot + unattended install + installed boot)
     runs-on: ubuntu-24.04
     needs: build
-    timeout-minutes: 30
+    timeout-minutes: 75
 
     steps:
+      - name: Checkout RAVLIN
+        uses: actions/checkout@v4
+
       - name: Download artifact
         uses: actions/download-artifact@v4
         with:
@@ -76,19 +79,20 @@ jobs:
 
       - name: Install QEMU and expect
         run: |
-          # azure apt mirrors on GH runners occasionally hang; fail fast at
-          # the connection level, then retry the whole step
-          APT_OPTS="-o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30"
-          for i in 1 2 3; do
-            echo "== apt attempt $i =="
-            if timeout 480 sudo apt-get update -qq $APT_OPTS && \
-               timeout 480 sudo apt-get install -y -qq $APT_OPTS \
-                 qemu-system-x86 expect xorriso; then
-              exit 0
-            fi
-            sleep 15
-          done
-          echo "apt failed after 3 attempts"; exit 1
+          # azure apt mirrors on GH runners occasionally hang: cap each
+          # attempt, then fall back to the primary Ubuntu mirror
+          install_deps() {
+            APT_OPTS="-o Acquire::Retries=3 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20"
+            timeout 300 sudo apt-get update -qq $APT_OPTS && \
+            timeout 300 sudo apt-get install -y -qq $APT_OPTS \
+              qemu-system-x86 qemu-utils expect xorriso
+          }
+          if ! install_deps; then
+            echo "== retrying against the primary Ubuntu mirror =="
+            sudo sed -i 's|azure.archive.ubuntu.com|archive.ubuntu.com|g' \
+              /etc/apt/sources.list.d/*.sources 2>/dev/null || true
+            install_deps
+          fi
 
       - name: Extract kernel and initramfs from the ISO
         run: |
@@ -169,59 +173,17 @@ jobs:
           expect smoke.exp
           echo "serial log tail:" && tail -20 serial.log || true
 
-      - name: Upload serial log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: smoke-serial-log
-          path: serial.log
-          if-no-files-found: ignore
-
-  install-test:
-    name: Install test (unattended install + boot)
-    runs-on: ubuntu-24.04
-    needs: build
-    timeout-minutes: 75
-
-    steps:
-      - name: Checkout RAVLIN
-        uses: actions/checkout@v4
-
-      - name: Download ISO artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: ravlin-iso
-
-      - name: Install QEMU and expect
-        run: |
-          APT_OPTS="-o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30"
-          for i in 1 2 3; do
-            echo "== apt attempt $i =="
-            if timeout 480 sudo apt-get update -qq $APT_OPTS && \
-               timeout 480 sudo apt-get install -y -qq $APT_OPTS \
-                 qemu-system-x86 qemu-utils expect xorriso; then
-              exit 0
-            fi
-            sleep 15
-          done
-          echo "apt failed after 3 attempts"; exit 1
-
-      - name: Extract kernel and initramfs from the ISO
-        run: |
-          xorriso -osirrox on -indev "$(ls ravlin-live-*.iso)" -extract /boot isoboot
-          ls -lh isoboot/vmlinuz isoboot/initrd
-
-      # The live image's built-in autoinstaller (dracut module, included by
-      # void-mklive) performs an unattended network install onto a blank disk
-      # when booted with root=vai auto=1 autourl=... It installs base-system
-      # plus the RAVLIN package set, then our postinstall applies branding
-      # (fish shells, os-release, services) inside the fresh install.
+      # ---- unattended install onto a blank disk, then boot the result ----
+      # Uses the autoinstaller dracut module that void-mklive bakes into
+      # every live image: boot with root=vai auto=1 and an answer file
+      # served from the runner over HTTP. Installs base-system plus the
+      # RAVLIN package set; a postinstall applies RAVLIN branding (fish
+      # shells, os-release, services) inside the fresh install.
       - name: Serve answer file and branding over HTTP
         run: |
           mkdir -p serve
           cp ci/autoinstall.cfg ci/postinstall.sh ci/postinstall-chroot.sh serve/
           cp -r rootfs/. serve/
-          ls -R serve | head -40
           (python3 -m http.server 8000 --directory serve >/tmp/httpd.log 2>&1 &)
           sleep 2
           curl -fsS http://127.0.0.1:8000/autoinstall.cfg >/dev/null && echo "http server up"
@@ -254,8 +216,6 @@ jobs:
           test -s disk.img
           qemu-img info disk.img | head -5
 
-      # Phase 2: boot the freshly installed disk (no ISO attached) and
-      # verify the installed system.
       - name: Boot the installed disk and verify
         run: |
           cat > verify.exp <<'EOF'
@@ -329,8 +289,9 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: install-serial-logs
+          name: qa-serial-logs
           path: |
+            serial.log
             install-serial.log
             verify-serial.log
           if-no-files-found: ignore
@@ -338,7 +299,7 @@ jobs:
   release:
     name: Publish release
     runs-on: ubuntu-24.04
-    needs: [smoke-test, install-test]
+    needs: [qa]
     if: startsWith(github.ref, 'refs/tags/v') || inputs.release == true
 
     steps:

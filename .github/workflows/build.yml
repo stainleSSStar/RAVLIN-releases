@@ -299,17 +299,16 @@ jobs:
               timeout { puts "\n=== CHECK 4 FAILED: os-release wrong ==="; exit 1 }
           }
 
-          # 5. expected services enabled (sv status gives one deterministic
-          #    line per call; with ls, column output can place an earlier
-          #    expect's match before a later pattern's text in the stream)
-          send "sv status dhcpcd\r"
+          # 5. expected services enabled (ls -1 prints one per line in
+          #    alphabetical order, so the stream order is deterministic;
+          #    sv status needs root to read supervise/ok)
+          send "ls -1 /var/service/\r"
           expect {
-              "run: dhcpcd" { puts "\n=== CHECK 5 PASSED: dhcpcd enabled ===" }
+              "dhcpcd" { puts "\n=== CHECK 5 PASSED: dhcpcd enabled ===" }
               timeout { puts "\n=== CHECK 5 FAILED: dhcpcd not enabled ==="; exit 1 }
           }
-          send "sv status wpa_supplicant\r"
           expect {
-              "run: wpa_supplicant" { puts "\n=== CHECK 5b PASSED: wpa_supplicant enabled ===" }
+              "wpa_supplicant" { puts "\n=== CHECK 5b PASSED: wpa_supplicant enabled ===" }
               timeout { puts "\n=== CHECK 5b FAILED: wpa_supplicant not enabled ==="; exit 1 }
           }
 

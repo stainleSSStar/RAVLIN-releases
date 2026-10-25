@@ -62,236 +62,172 @@ jobs:
             sha256sum.txt
           if-no-files-found: error
 
-  qa:
-    name: QA (live boot + unattended install + installed boot)
+  boot-bios:
+    name: Boot test (BIOS, via the ISO bootloader)
     runs-on: ubuntu-24.04
     needs: build
-    timeout-minutes: 75
+    timeout-minutes: 40
 
     steps:
-      - name: Checkout RAVLIN
+      - name: Checkout RAVLIN (test scripts)
         uses: actions/checkout@v4
 
-      - name: Download artifact
+      - name: Download ISO artifact
         uses: actions/download-artifact@v4
         with:
           name: ravlin-iso
 
       - name: Install QEMU and expect
         run: |
-          # azure apt mirrors on GH runners occasionally hang: cap each
-          # attempt, then fall back to the primary Ubuntu mirror
-          install_deps() {
-            APT_OPTS="-o Acquire::Retries=3 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20"
-            timeout 300 sudo apt-get update -qq $APT_OPTS && \
-            timeout 300 sudo apt-get install -y -qq $APT_OPTS \
-              qemu-system-x86 qemu-utils expect xorriso
-          }
-          if ! install_deps; then
-            echo "== retrying against the primary Ubuntu mirror =="
-            sudo sed -i 's|azure.archive.ubuntu.com|archive.ubuntu.com|g' \
-              /etc/apt/sources.list.d/*.sources 2>/dev/null || true
-            install_deps
-          fi
+          # azure apt mirrors on GH runners occasionally hang; fail fast at
+          # the connection level, then retry the whole step
+          APT_OPTS="-o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30"
+          for i in 1 2 3; do
+            echo "== apt attempt $i =="
+            if timeout 480 sudo apt-get update -qq $APT_OPTS && \
+               timeout 480 sudo apt-get install -y -qq $APT_OPTS \
+                 qemu-system-x86 expect; then
+              exit 0
+            fi
+            sleep 15
+          done
+          echo "apt failed after 3 attempts"; exit 1
 
-      - name: Extract kernel and initramfs from the ISO
+      # Boots the ISO with its own bootloader (SeaBIOS -> ISOLINUX -> kernel),
+      # logs in over the serial console with expect, and asserts the RAVLIN
+      # specifics: fish session, installer presence, identity, services
+      # actually running, sound card detected.
+      - name: Boot the ISO via its ISOLINUX bootloader and verify
+        run: expect ci/smoke-bios.exp
+
+      - name: Upload serial log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-bios-serial-log
+          path: serial-bios.log
+          if-no-files-found: ignore
+
+  boot-uefi:
+    name: Boot test (UEFI, via the ISO bootloader)
+    runs-on: ubuntu-24.04
+    needs: build
+    timeout-minutes: 50
+
+    steps:
+      - name: Checkout RAVLIN (test scripts)
+        uses: actions/checkout@v4
+
+      - name: Download ISO artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ravlin-iso
+
+      - name: Install QEMU, OVMF and expect
         run: |
-          xorriso -osirrox on -indev "$(ls ravlin-live-*.iso)" -extract /boot isoboot
-          ls -lh isoboot/vmlinuz isoboot/initrd
+          APT_OPTS="-o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30"
+          for i in 1 2 3; do
+            echo "== apt attempt $i =="
+            if timeout 480 sudo apt-get update -qq $APT_OPTS && \
+               timeout 480 sudo apt-get install -y -qq $APT_OPTS \
+                 qemu-system-x86 ovmf expect; then
+              exit 0
+            fi
+            sleep 15
+          done
+          echo "apt failed after 3 attempts"; exit 1
 
-      # Boots the live ISO headless in QEMU (software emulation — GitHub
-      # runners have no KVM), logs in over the serial console with expect,
-      # and asserts the RAVLIN specifics. The kernel cmdline mirrors the
-      # ISO's default GRUB entry plus console=ttyS0 for the serial login.
-      - name: Boot the live ISO and verify the session
-        env:
-          KAPPEND: >-
-            root=live:CDLABEL=VOID_LIVE ro init=/sbin/init
-            rd.luks=0 rd.md=0 rd.dm=0 loglevel=4 gpt add_efi_memmap
-            vconsole.unicode=1 vconsole.keymap=us locale.LANG=en_US.UTF-8
-            rd.overlayfs=1 live.shell=/usr/bin/fish console=ttyS0
+      # Boots the ISO under OVMF so the EFI bootloader chain (OVMF -> GRUB
+      # EFI -> kernel) is exercised, then verifies the live session over the
+      # serial console.
+      - name: Boot the ISO via its GRUB EFI bootloader and verify
+        run: expect ci/smoke-uefi.exp
+
+      - name: Upload serial log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-uefi-serial-log
+          path: serial-uefi.log
+          if-no-files-found: ignore
+
+  install-test:
+    name: Install test (real void-installer, local install)
+    runs-on: ubuntu-24.04
+    needs: build
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout RAVLIN (test scripts)
+        uses: actions/checkout@v4
+
+      - name: Download ISO artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ravlin-iso
+
+      - name: Install QEMU and expect
         run: |
-          cat > smoke.exp <<'EOF'
-          set timeout 900
-          log_file -noappend serial.log
-          spawn qemu-system-x86_64 -m 3072 -smp 2 -nographic -no-reboot \
-            -kernel isoboot/vmlinuz -initrd isoboot/initrd -append "$env(KAPPEND)" \
-            -cdrom [glob ravlin-live-*.iso]
-
-          # 1. boot reaches the login prompt
-          expect {
-              "login:"  { puts "\n=== CHECK 1 PASSED: login prompt ===" }
-              timeout   { puts "\n=== CHECK 1 FAILED: boot timeout ==="; exit 1 }
-              eof       { puts "\n=== CHECK 1 FAILED: qemu exited ==="; exit 1 }
-          }
-
-          # post-boot checks fail fast; fish wraps command echoes in ANSI
-          # escapes, so match only contiguous output substrings
-          set timeout 60
-          send "root\r"
-          expect "Password:"
-          send "voidlinux\r"
-
-          # 2. root lands in fish with the RAVLIN config (greeting is unique to it)
-          expect {
-              "minimal Void Linux remix" { puts "\n=== CHECK 2 PASSED: fish + RAVLIN config ===" }
-              timeout { puts "\n=== CHECK 2 FAILED: no fish greeting ==="; exit 1 }
-          }
-
-          # 3. root's login shell is really fish
-          send "status fish-path\r"
-          expect {
-              "/usr/bin/fish" { puts "\n=== CHECK 3 PASSED: root shell is fish ===" }
-              timeout { puts "\n=== CHECK 3 FAILED: shell is not fish ==="; exit 1 }
-          }
-
-          # 4. the interactive console installer is on the image
-          send "command -v void-installer\r"
-          expect {
-              "/usr/bin/void-installer" { puts "\n=== CHECK 4 PASSED: void-installer present ===" }
-              timeout { puts "\n=== CHECK 4 FAILED: void-installer missing ==="; exit 1 }
-          }
-
-          # 5. RAVLIN identity survived into the image
-          send "grep PRETTY /etc/os-release\r"
-          expect {
-              "_NAME=\"RAVLIN 0.1.0\"" { puts "\n=== CHECK 5 PASSED: RAVLIN os-release ===" }
-              timeout { puts "\n=== CHECK 5 FAILED: os-release wrong ==="; exit 1 }
-          }
-
-          # 6. network + sound tooling present on the live image
-          send "command -v wpa_supplicant; and command -v alsamixer\r"
-          expect {
-              "/usr/bin/alsamixer" { puts "\n=== CHECK 6 PASSED: wifi + sound tooling present ===" }
-              timeout { puts "\n=== CHECK 6 FAILED: tooling missing ==="; exit 1 }
-          }
-
-          puts "\n=== ALL SMOKE CHECKS PASSED ==="
-          send "\001x"
-          expect eof
-          EOF
-          expect smoke.exp
-          echo "serial log tail:" && tail -20 serial.log || true
-
-      # ---- unattended install onto a blank disk, then boot the result ----
-      # Uses the autoinstaller dracut module that void-mklive bakes into
-      # every live image: boot with root=vai auto=1 and an answer file
-      # served from the runner over HTTP. Installs base-system plus the
-      # RAVLIN package set; a postinstall applies RAVLIN branding (fish
-      # shells, os-release, services) inside the fresh install.
-      - name: Serve answer file and branding over HTTP
-        run: |
-          mkdir -p serve
-          cp ci/autoinstall.cfg ci/postinstall.sh ci/postinstall-chroot.sh serve/
-          cp -r rootfs/. serve/
-          (python3 -m http.server 8000 --directory serve >/tmp/httpd.log 2>&1 &)
-          sleep 2
-          curl -fsS http://127.0.0.1:8000/autoinstall.cfg >/dev/null && echo "http server up"
+          APT_OPTS="-o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30"
+          for i in 1 2 3; do
+            echo "== apt attempt $i =="
+            if timeout 480 sudo apt-get update -qq $APT_OPTS && \
+               timeout 480 sudo apt-get install -y -qq $APT_OPTS \
+                 qemu-system-x86 qemu-utils expect; then
+              exit 0
+            fi
+            sleep 15
+          done
+          echo "apt failed after 3 attempts"; exit 1
 
       - name: Create blank target disk
         run: qemu-img create -f raw disk.img 8G
 
-      - name: Run unattended install onto the disk
+      # Installs RAVLIN exactly the way users do: boot the live ISO through
+      # its own bootloader, then drive the real interactive void-installer
+      # (dialog menus over the serial console) through a Local-source install
+      # onto the blank disk. ci/install-ravlin.exp walks the same menus a
+      # user sees; there is no separate CI install path.
+      - name: Install RAVLIN with the interactive void-installer
+        run: expect ci/install-ravlin.exp
+
+      - name: Sanity-check the installed disk image
         run: |
-          cat > install.exp <<'EOF'
-          set timeout 2700
-          log_file -noappend install-serial.log
-          spawn qemu-system-x86_64 -m 3072 -smp 2 -nographic -no-reboot \
-            -nic user,model=virtio-net-pci \
-            -kernel isoboot/vmlinuz -initrd isoboot/initrd \
-            -append "root=vai auto=1 autourl=http://10.0.2.2:8000/autoinstall.cfg console=ttyS0" \
-            -cdrom [glob ravlin-live-*.iso] \
-            -drive file=disk.img,format=raw,if=virtio
-
-          expect {
-              "RAVLIN_POSTINSTALL_DONE" { puts "\n=== INSTALL PASSED ===" }
-              timeout { puts "\n=== INSTALL FAILED: timeout ==="; exit 1 }
-              eof     { puts "\n=== INSTALL FAILED: qemu exited ==="; exit 1 }
-          }
-
-          send "\001x"
-          expect eof
-          EOF
-          expect install.exp
           test -s disk.img
           qemu-img info disk.img | head -5
 
-      - name: Boot the installed disk and verify
+      # Test plumbing only: enable the serial console on the installed test
+      # system so the next step can observe its boot. This happens after the
+      # installation is complete and does not alter what is validated.
+      - name: Enable the serial console on the installed disk (test plumbing)
         run: |
-          cat > verify.exp <<'EOF'
-          set timeout 900
-          log_file -noappend verify-serial.log
-          spawn qemu-system-x86_64 -m 2048 -smp 2 -nographic -no-reboot \
-            -nic user,model=virtio-net-pci \
-            -drive file=disk.img,format=raw,if=virtio
-
-          # 1. installed system reaches a login prompt
-          expect {
-              "login:" { puts "\n=== CHECK 1 PASSED: installed system boots ===" }
-              timeout { puts "\n=== CHECK 1 FAILED: boot timeout ==="; exit 1 }
-              eof     { puts "\n=== CHECK 1 FAILED: qemu exited ==="; exit 1 }
+          set -euo pipefail
+          LOOP="$(sudo losetup -fP --show disk.img)"
+          echo "loop device: $LOOP"
+          cleanup() {
+            sudo umount -R /tmp/ravlin-root 2>/dev/null || true
+            sudo losetup -d "$LOOP" 2>/dev/null || true
           }
+          trap cleanup EXIT
+          mkdir -p /tmp/ravlin-root
+          sudo mount "${LOOP}p1" /tmp/ravlin-root
+          for fs in proc sys dev; do
+            sudo mount --bind "/$fs" "/tmp/ravlin-root/$fs"
+          done
+          sudo cp ci/postinstall-chroot.sh /tmp/ravlin-root/tmp/
+          sudo chroot /tmp/ravlin-root /bin/sh /tmp/postinstall-chroot.sh
 
-          send "ravlin\r"
-          expect "Password:"
-          send "ravlin-ci\r"
-
-          # 2. CI user's login shell is fish with the RAVLIN config
-          expect {
-              "minimal Void Linux remix" { puts "\n=== CHECK 2 PASSED: user shell is fish ===" }
-              timeout { puts "\n=== CHECK 2 FAILED: no fish session ==="; exit 1 }
-          }
-
-          # post-login checks fail fast
-          set timeout 60
-
-          # 3. the system is booted from the installed disk, not the ISO
-          send "mount | grep \" / \"\r"
-          expect {
-              "vda1" { puts "\n=== CHECK 3 PASSED: booted from disk ===" }
-              timeout { puts "\n=== CHECK 3 FAILED: not booted from disk ==="; exit 1 }
-          }
-
-          # 4. RAVLIN identity on the installed system
-          send "grep PRETTY /etc/os-release\r"
-          expect {
-              "_NAME=\"RAVLIN 0.1.0\"" { puts "\n=== CHECK 4 PASSED: RAVLIN os-release ===" }
-              timeout { puts "\n=== CHECK 4 FAILED: os-release wrong ==="; exit 1 }
-          }
-
-          # 5. expected services enabled (ls -1 prints one per line in
-          #    alphabetical order, so the stream order is deterministic;
-          #    sv status needs root to read supervise/ok)
-          send "ls -1 /var/service/\r"
-          expect {
-              "dhcpcd" { puts "\n=== CHECK 5 PASSED: dhcpcd enabled ===" }
-              timeout { puts "\n=== CHECK 5 FAILED: dhcpcd not enabled ==="; exit 1 }
-          }
-          expect {
-              "wpa_supplicant" { puts "\n=== CHECK 5b PASSED: wpa_supplicant enabled ===" }
-              timeout { puts "\n=== CHECK 5b FAILED: wpa_supplicant not enabled ==="; exit 1 }
-          }
-
-          # 6. RAVLIN package set present on the installed system
-          send "command -v alsamixer\r"
-          expect {
-              "/usr/bin/alsamixer" { puts "\n=== CHECK 6 PASSED: sound tooling installed ===" }
-              timeout { puts "\n=== CHECK 6 FAILED: tooling missing ==="; exit 1 }
-          }
-
-          puts "\n=== ALL INSTALL CHECKS PASSED ==="
-          send "\001x"
-          expect eof
-          EOF
-          expect verify.exp
+      # Phase 2: boot the freshly installed disk — no ISO attached — through
+      # its own GRUB, and verify the installed system.
+      - name: Boot the installed disk via its own GRUB and verify
+        run: expect ci/verify-install.exp
 
       - name: Upload serial logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: qa-serial-logs
+          name: install-serial-logs
           path: |
-            serial.log
             install-serial.log
             verify-serial.log
           if-no-files-found: ignore
@@ -299,7 +235,7 @@ jobs:
   release:
     name: Publish release
     runs-on: ubuntu-24.04
-    needs: [qa]
+    needs: [boot-bios, boot-uefi, install-test]
     if: startsWith(github.ref, 'refs/tags/v') || inputs.release == true
 
     steps:
@@ -311,7 +247,7 @@ jobs:
       # By default the release is published on this repository. To publish
       # into a separate releases repository instead, set these two secrets:
       #   RELEASES_REPO  - e.g. "stainleSSStar/RAVLIN-releases"
-      #   RELEASES_TOKEN - a PAT with contents:write on that repository
+      #   RELEASES_TOKEN - a PAT with contents:write on that repo
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:

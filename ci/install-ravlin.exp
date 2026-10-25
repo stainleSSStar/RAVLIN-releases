@@ -1,0 +1,119 @@
+#!/usr/bin/expect -f
+#
+# RAVLIN install test — drives the REAL interactive void-installer.
+#
+# Boots the live ISO through its own bootloader onto a machine with one
+# blank virtio disk, logs in on the serial console, then walks the actual
+# dialog-based installer menus with the Local source — the documented
+# RAVLIN installation — and lets it install to the disk. This is the
+# installation users perform, not a parallel network autoinstaller.
+#
+# dialog menus are driven by typing the first letter of the item's tag
+# (a dialog hot-key, per dialog(1)) plus ENTER; arrow keys are used where
+# multiple tags share a first letter. Only contiguous output substrings
+# are matched because dialog repaints the screen with cursor-positioning
+# escapes.
+#
+# Flow (pinned void-mklive installer.sh):
+#   welcome -> RootPassword -> BootLoader (/dev/vda) -> Filesystems
+#   (/dev/vda1, ext4, /, new fs) -> Source (Local) -> Install
+#   -> accept defaults on the services checklist -> reboot
+
+set timeout 1500
+log_file -noappend install-serial.log
+
+spawn qemu-system-x86_64 -m 3584 -smp 2 -nographic -no-reboot \
+    -nic user,model=virtio-net-pci \
+    -drive file=disk.img,format=raw,if=virtio \
+    -cdrom [glob ravlin-live-*.iso] -boot d
+
+expect {
+    "login:" { puts "\n=== live ISO booted through its bootloader ===" }
+    timeout  { puts "\n=== FAILED: live boot timeout ==="; exit 1 }
+    eof      { puts "\n=== FAILED: qemu exited ==="; exit 1 }
+}
+
+set timeout 120
+send "root\r"
+expect "Password:"
+send "voidlinux\r"
+expect "minimal Void Linux remix"
+
+# Partition the target disk up front so the installer's interactive
+# Partition step (cfdisk/fdisk) can be skipped; its Filesystems step then
+# sees /dev/vda1. Partitioning itself is upstream tooling, not RAVLIN
+# code, and the installer does not require the Partition menu to have
+# been used.
+#
+# The success marker is assembled from split tokens (string join) so it
+# never appears contiguously in the terminal echo of the typed command.
+set timeout 300
+send "printf 'label: dos\\ntype=83\\n' | sfdisk /dev/vda; and string join '' RAVLIN_ PARTITIONED _OK\r"
+expect {
+    "RAVLIN_PARTITIONED_OK" { puts "\n=== target disk partitioned ===" }
+    timeout { puts "\n=== FAILED: sfdisk did not complete ==="; exit 1 }
+}
+
+# --- void-installer: the documented interactive install -----------------
+set timeout 120
+send "void-installer\r"
+expect "Enter the void"
+send "\r"                     ;# welcome msgbox
+
+# Root password (entered twice)
+expect "installation menu"
+send "R\r"
+expect "Enter the root password"
+send "ravlin-ci\r"
+expect "Enter the root password again"
+send "ravlin-ci\r"
+
+# Bootloader: /dev/vda is the first (and only) disk entry; graphical
+# terminal for GRUB: yes
+expect "installation menu"
+send "B\r"
+expect "Select the disk to install the bootloader"
+send "\r"
+expect "Use a graphical terminal for the boot loader?"
+send "\r"
+
+# Filesystems: /dev/vda1 as ext4, mounted on /, newly created
+expect "installation menu"
+send "F\r"
+expect "Select the partition to edit"
+send "\r"                      ;# /dev/vda1 is the only entry
+expect "Select the filesystem type for /dev/vda1"
+send "\033\[B\033\[B\033\[B\r" ;# btrfs -> ext2 -> ext3 -> ext4
+expect "Please specify the mount point for /dev/vda1:"
+send "/\r"
+expect "Do you want to create a new filesystem on /dev/vda1?"
+send "\r"                      ;# yes
+expect "Select the partition to edit"
+send "\t\t\r"                  ;# leave the list, press the Done button
+
+# Source: Local — copies the live rootfs; this is the RAVLIN install
+expect "installation menu"
+send "S\r"
+expect "Select installation source"
+send "\r"                      ;# Local
+
+# Install: mkfs, rootfs copy, dracut, GRUB — slow under TCG
+expect "installation menu"
+set timeout 2700
+send "I\r"
+expect "The user account is not set up properly"
+send "\r"                      ;# continue without a user
+expect "The following operations will be executed"
+expect "Do you want to continue?"
+send "\r"
+expect "Select services to enable"
+send "\t\r"                    ;# accept the current set (TAB to OK)
+expect "has been installed successfully"
+expect "Do you want to reboot the system?"
+send "\r"                      ;# yes; QEMU exits because of -no-reboot
+
+set timeout 300
+expect {
+    eof     { puts "\n=== INSTALL PASSED: installer completed, guest rebooted ===" }
+    timeout { puts "\n=== INSTALL FAILED: guest did not reboot ==="; exit 1 }
+}

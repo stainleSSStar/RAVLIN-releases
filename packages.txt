@@ -11,6 +11,10 @@ fish-shell
 # --- installer -----------------------------------------------------------
 # TUI library used by void-installer, the interactive console installer.
 dialog
+# Mirror picker used by void-installer's Mirror menu (menu_mirror execs
+# xmirror). Upstream's installer expects it on the live image; its local
+# install path removes it from the target again.
+xmirror
 
 # --- drivers: wifi + LAN --------------------------------------------------
 # Network firmware blobs (Atheros, Broadcom, Intel iwlwifi, Realtek, ...).

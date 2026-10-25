@@ -1,0 +1,86 @@
+#!/usr/bin/expect -f
+#
+# RAVLIN BIOS boot test.
+#
+# Boots the built ISO through its own bootloader chain (SeaBIOS ->
+# ISOLINUX -> kernel) — no -kernel/-initrd shortcuts — and drives the live
+# session over the serial console. The ISO kernel cmdline carries
+# console=ttyS0 (set in build.sh); the vmklive live image enables a serial
+# getty when it sees it.
+#
+# Checks:
+#   1. the ISO reaches a login prompt via its bootloader
+#   2. root lands in fish with the RAVLIN config
+#   3. root's login shell is really fish
+#   4. void-installer is on the image
+#   5. /etc/os-release identifies RAVLIN
+#   6. dhcpcd and wpa_supplicant are actually running (sv status), not
+#      merely enabled
+#   7. ALSA detects the emulated sound card (aplay -l)
+#
+# fish wraps command echoes in ANSI escapes; only contiguous output
+# substrings are matched.
+
+set timeout 1500
+log_file -noappend serial-bios.log
+
+spawn qemu-system-x86_64 -m 3072 -smp 2 -nographic -no-reboot \
+    -nic user,model=virtio-net-pci \
+    -device intel-hda -device hda-duplex \
+    -cdrom [glob ravlin-live-*.iso] -boot d
+
+expect {
+    "login:" { puts "\n=== CHECK 1 PASSED: booted via the ISOLINUX bootloader ===" }
+    timeout  { puts "\n=== CHECK 1 FAILED: boot timeout ==="; exit 1 }
+    eof      { puts "\n=== CHECK 1 FAILED: qemu exited ==="; exit 1 }
+}
+
+set timeout 120
+send "root\r"
+expect "Password:"
+send "voidlinux\r"
+
+expect {
+    "minimal Void Linux remix" { puts "\n=== CHECK 2 PASSED: fish + RAVLIN config ===" }
+    timeout { puts "\n=== CHECK 2 FAILED: no RAVLIN fish greeting ==="; exit 1 }
+}
+
+send "status fish-path\r"
+expect {
+    "/usr/bin/fish" { puts "\n=== CHECK 3 PASSED: root shell is fish ===" }
+    timeout { puts "\n=== CHECK 3 FAILED: shell is not fish ==="; exit 1 }
+}
+
+send "command -v void-installer\r"
+expect {
+    "/usr/bin/void-installer" { puts "\n=== CHECK 4 PASSED: void-installer present ===" }
+    timeout { puts "\n=== CHECK 4 FAILED: void-installer missing ==="; exit 1 }
+}
+
+send "grep PRETTY /etc/os-release\r"
+expect {
+    "RAVLIN 0.1.0" { puts "\n=== CHECK 5 PASSED: RAVLIN os-release ===" }
+    timeout { puts "\n=== CHECK 5 FAILED: os-release wrong ==="; exit 1 }
+}
+
+# service health: runit must be supervising them and they must be running
+send "sv status dhcpcd wpa_supplicant\r"
+expect {
+    "run: dhcpcd" { puts "\n=== CHECK 6 PASSED: dhcpcd running ===" }
+    timeout { puts "\n=== CHECK 6 FAILED: dhcpcd not running ==="; exit 1 }
+}
+expect {
+    "run: wpa_supplicant" { puts "\n=== CHECK 6b PASSED: wpa_supplicant running ===" }
+    timeout { puts "\n=== CHECK 6b FAILED: wpa_supplicant not running ==="; exit 1 }
+}
+
+# sound: the emulated HDA card must be detected by the ALSA stack
+send "aplay -l\r"
+expect {
+    "card 0" { puts "\n=== CHECK 7 PASSED: ALSA sees the sound card ===" }
+    timeout { puts "\n=== CHECK 7 FAILED: no sound card detected ==="; exit 1 }
+}
+
+puts "\n=== ALL BIOS BOOT CHECKS PASSED ==="
+send "\001x"
+expect eof

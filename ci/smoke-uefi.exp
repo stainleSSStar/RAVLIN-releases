@@ -1,0 +1,47 @@
+#!/usr/bin/expect -f
+#
+# RAVLIN UEFI boot test.
+#
+# Boots the built ISO with OVMF so the EFI bootloader chain (OVMF ->
+# GRUB EFI -> kernel) is exercised, then verifies the live session over the
+# serial console (console=ttyS0 is part of the ISO kernel cmdline; the live
+# image enables a serial getty for it). GRUB auto-boots the default entry
+# after its 15s timeout.
+#
+# Checks:
+#   1. the ISO reaches a login prompt via the EFI bootloader chain
+#   2. root lands in fish with the RAVLIN config
+#   3. /etc/os-release identifies RAVLIN
+
+set timeout 1800
+log_file -noappend serial-uefi.log
+
+spawn qemu-system-x86_64 -m 3072 -smp 2 -nographic -no-reboot \
+    -bios /usr/share/ovmf/OVMF.fd \
+    -cdrom [glob ravlin-live-*.iso]
+
+expect {
+    "login:" { puts "\n=== CHECK 1 PASSED: booted via the UEFI bootloader chain ===" }
+    timeout  { puts "\n=== CHECK 1 FAILED: UEFI boot timeout ==="; exit 1 }
+    eof      { puts "\n=== CHECK 1 FAILED: qemu exited ==="; exit 1 }
+}
+
+set timeout 120
+send "root\r"
+expect "Password:"
+send "voidlinux\r"
+
+expect {
+    "minimal Void Linux remix" { puts "\n=== CHECK 2 PASSED: fish + RAVLIN config ===" }
+    timeout { puts "\n=== CHECK 2 FAILED: no RAVLIN fish greeting ==="; exit 1 }
+}
+
+send "grep PRETTY /etc/os-release\r"
+expect {
+    "RAVLIN 0.1.0" { puts "\n=== CHECK 3 PASSED: RAVLIN os-release ===" }
+    timeout { puts "\n=== CHECK 3 FAILED: os-release wrong ==="; exit 1 }
+}
+
+puts "\n=== ALL UEFI BOOT CHECKS PASSED ==="
+send "\001x"
+expect eof

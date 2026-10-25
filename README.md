@@ -33,7 +33,7 @@ bash build.sh
 
 Output: `ravlin-live-x86_64-0.1.0.iso`.
 
-Useful overrides:
+Useful overrides (honoured on the native path *and* forwarded into the Docker/Podman path):
 
 ```sh
 RAVLIN_MIRROR=https://repo-default.voidlinux.org/current bash build.sh  # pick a mirror
@@ -54,6 +54,16 @@ Every release ships the ISO plus a `sha256sum.txt`. By default releases land on 
 | `RELEASES_REPO` | e.g. `stainleSSStar/RAVLIN-releases` |
 | `RELEASES_TOKEN` | a personal access token with `contents:write` on that repo |
 
+#### What CI validates
+
+Every build is gated on three QEMU jobs (software emulation — the runners have no KVM), all booting the actual ISO artifacts:
+
+- **BIOS boot** — the ISO boots through its own bootloader chain (SeaBIOS → ISOLINUX → kernel), then over the serial console CI verifies: fish login shell with the RAVLIN config, `void-installer` present, RAVLIN `os-release`, `dhcpcd`/`wpa_supplicant` *running* (`sv status`, not just enabled), and the ALSA stack detecting an emulated sound card (`aplay -l`).
+- **UEFI boot** — the same ISO boots through the EFI chain (OVMF → GRUB EFI → kernel) to a working live session.
+- **Install test** — the installation users actually perform: CI boots the live ISO, then drives the *real interactive `void-installer`* through its dialog menus (root password, bootloader, ext4 on `/`, **Local** source) onto a blank disk. The disk then boots through its own GRUB and the installed system is verified (fish, identity, services running, package set).
+
+Honest limits: tests run on emulated hardware (virtio disk/NIC, emulated HDA audio), so physical wifi radios, speakers and exotic firmware remain untested by CI. A serial console is enabled on the installed *test* system (test plumbing in `ci/postinstall-chroot.sh`) purely so the boot test can observe it — the installation itself is untouched.
+
 ### Repository layout
 
 ```
@@ -69,6 +79,12 @@ Every release ships the ISO plus a `sha256sum.txt`. By default releases land on 
 │   │   ├── default/useradd   # new users get SHELL=/usr/bin/fish
 │   │   └── skel/.config/fish/config.fish   # fish prompt for new users
 │   └── root/.config/fish/config.fish       # fish prompt for root
+├── ci/                   # QEMU/expect boot, install and verify scripts
+│   ├── smoke-bios.exp    # BIOS boot test via the ISO's ISOLINUX bootloader
+│   ├── smoke-uefi.exp    # UEFI boot test via the ISO's GRUB EFI bootloader
+│   ├── install-ravlin.exp    # drives the real interactive void-installer
+│   ├── verify-install.exp   # boots the installed disk via its own GRUB
+│   └── postinstall-chroot.sh # CI-only serial-console test plumbing
 └── .gitignore
 ```
 
@@ -114,6 +130,8 @@ sudo xbps-remove <pkg>
 ## Design decisions
 
 - **void-installer instead of a custom installer.** It is already an interactive, dialog-based console installer, maintained upstream and battle-tested. RAVLIN reuses it with branding rather than maintaining a fork.
+- **xmirror is included.** void-installer's Mirror menu execs `xmirror`; it ships on the live image (the installer's local-install cleanup removes it from the target again), so every installer menu item works.
+- **Serial console on the live image.** The live kernel cmdline carries `console=tty0 console=ttyS0`, so a live session is usable over a serial console (the vmklive live image enables a serial getty for it). Installed systems are untouched — the installer writes its own GRUB config.
 - **bash stays installed.** Removing it breaks virtually every system script. fish is the *default shell* (login shell of root and new users), not the only binary on disk.
 - **No sudo alternative added.** `base-system` ships sudo already; nothing extra needed.
 - **Firmware scope.** Network (wifi+ethernet) and sound firmware are included per the distro's goals. For full blobs (AMD/Intel/NVIDIA GPU microcode etc.) add `linux-firmware` to `packages.txt`. CPU microcode (`intel-ucode` / `amd-ucode`) is a reasonable optional addition.

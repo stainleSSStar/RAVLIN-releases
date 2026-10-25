@@ -1,0 +1,82 @@
+#!/usr/bin/expect -f
+#
+# RAVLIN phase-2 install verification.
+#
+# Boots the freshly installed disk through its own bootloader (SeaBIOS ->
+# GRUB in the MBR -> kernel). ci/postinstall-chroot.sh, run in a chroot on
+# the disk image before this script, enabled the serial console on the
+# installed test system so this boot is observable and log-in-able.
+#
+# Checks:
+#   1. the installed system boots via its own GRUB
+#   2. root lands in fish with the RAVLIN config
+#   3. root's login shell is fish
+#   4. the system is booted from the disk, not the ISO
+#   5. RAVLIN identity on the installed system
+#   6. dhcpcd and wpa_supplicant are running (sv status), not just enabled
+#   7. the RAVLIN package set (sound tooling) made it onto the disk
+#
+# fish wraps command echoes in ANSI escapes; only contiguous output
+# substrings are matched.
+
+set timeout 1500
+log_file -noappend verify-serial.log
+
+spawn qemu-system-x86_64 -m 2048 -smp 2 -nographic -no-reboot \
+    -nic user,model=virtio-net-pci \
+    -drive file=disk.img,format=raw,if=virtio
+
+expect {
+    "login:" { puts "\n=== CHECK 1 PASSED: installed system boots via its own GRUB ===" }
+    timeout  { puts "\n=== CHECK 1 FAILED: boot timeout ==="; exit 1 }
+    eof      { puts "\n=== CHECK 1 FAILED: qemu exited ==="; exit 1 }
+}
+
+set timeout 120
+send "root\r"
+expect "Password:"
+send "ravlin-ci\r"
+
+expect {
+    "minimal Void Linux remix" { puts "\n=== CHECK 2 PASSED: root lands in RAVLIN fish ===" }
+    timeout { puts "\n=== CHECK 2 FAILED: no fish session ==="; exit 1 }
+}
+
+send "status fish-path\r"
+expect {
+    "/usr/bin/fish" { puts "\n=== CHECK 3 PASSED: root shell is fish ===" }
+    timeout { puts "\n=== CHECK 3 FAILED: shell is not fish ==="; exit 1 }
+}
+
+send "mount | grep \" / \"\r"
+expect {
+    "vda1" { puts "\n=== CHECK 4 PASSED: booted from the installed disk ===" }
+    timeout { puts "\n=== CHECK 4 FAILED: not booted from disk ==="; exit 1 }
+}
+
+send "grep PRETTY /etc/os-release\r"
+expect {
+    "RAVLIN 0.1.0" { puts "\n=== CHECK 5 PASSED: RAVLIN os-release ===" }
+    timeout { puts "\n=== CHECK 5 FAILED: os-release wrong ==="; exit 1 }
+}
+
+# service health: runit must be supervising them and they must be running
+send "sv status dhcpcd wpa_supplicant\r"
+expect {
+    "run: dhcpcd" { puts "\n=== CHECK 6 PASSED: dhcpcd running ===" }
+    timeout { puts "\n=== CHECK 6 FAILED: dhcpcd not running ==="; exit 1 }
+}
+expect {
+    "run: wpa_supplicant" { puts "\n=== CHECK 6b PASSED: wpa_supplicant running ===" }
+    timeout { puts "\n=== CHECK 6b FAILED: wpa_supplicant not running ==="; exit 1 }
+}
+
+send "command -v alsamixer\r"
+expect {
+    "/usr/bin/alsamixer" { puts "\n=== CHECK 7 PASSED: sound tooling installed ===" }
+    timeout { puts "\n=== CHECK 7 FAILED: tooling missing ==="; exit 1 }
+}
+
+puts "\n=== ALL INSTALL CHECKS PASSED ==="
+send "\001x"
+expect eof

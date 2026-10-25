@@ -26,8 +26,11 @@ MKLIVE_REF="${MKLIVE_REF:-8ca31d112776fdbf7c1deb3dd7e15d87d6712db3}"
 CONTAINER_IMAGE="ghcr.io/void-linux/void-glibc:latest"
 # Live services: DHCP on any NIC, wifi supplicant, power button.
 SERVICES="dhcpcd wpa_supplicant acpid"
-# The anon live user gets fish too.
-KCMDLINE="live.shell=/usr/bin/fish"
+# The anon live user gets fish too. console=ttyS0 makes the live image usable
+# over a serial console: the vmklive dracut module enables agetty-ttyS0 when
+# it sees console=ttyS0 on the kernel cmdline. CI boots the ISO through its
+# own bootloaders and drives the installer over this serial console.
+KCMDLINE="live.shell=/usr/bin/fish console=tty0 console=ttyS0,115200n8"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUILD_DIR="$SCRIPT_DIR/build"
@@ -59,7 +62,16 @@ prepare_mklive() {
     fi
     log "Pinning void-mklive to $MKLIVE_REF"
     git -C "$MKLIVE_DIR" fetch --quiet origin || true
-    git -C "$MKLIVE_DIR" checkout --quiet --detach "$MKLIVE_REF"
+    git -C "$MKLIVE_DIR" checkout --quiet --detach "$MKLIVE_REF" \
+        || die "failed to check out pinned void-mklive ref $MKLIVE_REF"
+    # Belt and braces: never build from anything but the pinned revision.
+    local pinned head
+    pinned="$(git -C "$MKLIVE_DIR" rev-parse "${MKLIVE_REF}^{commit}")"
+    head="$(git -C "$MKLIVE_DIR" rev-parse HEAD)"
+    [ -n "$pinned" ] && [ -n "$head" ] \
+        || die "could not resolve the void-mklive revision to build (git rev-parse failed)"
+    [ "$pinned" = "$head" ] \
+        || die "void-mklive HEAD ($head) does not match the pinned ref $MKLIVE_REF ($pinned)"
 
     # Ship void-installer (Void's interactive console installer), the same way
     # mkiso.sh does, but branded for RAVLIN.
@@ -99,14 +111,23 @@ run_container() {
 
     log "Not a Void host — building inside $runner ($CONTAINER_IMAGE) ..."
     "$runner" run --rm --privileged \
+        -e RAVLIN_ARCH="$ARCH" \
+        -e RAVLIN_MIRROR="$MIRROR" \
+        -e MKLIVE_REF="$MKLIVE_REF" \
         -v "$SCRIPT_DIR":/ravlin -w /ravlin \
         "$CONTAINER_IMAGE" \
         bash /ravlin/build.sh --native
 }
 
+# NOTE: run_native must never be invoked as "run_native || die ..." — the
+# function would then run with set -e suppressed and a failed step (e.g. the
+# pinned void-mklive checkout) would leave the build to continue on whatever
+# revision happens to be checked out.
 main() {
     if [ "${1:-}" = "--native" ]; then
-        run_native || die "native build failed (xbps-install not found — not a Void host?)"
+        command -v xbps-install >/dev/null 2>&1 \
+            || die "native build requested, but xbps-install was not found (not a Void host?)"
+        run_native
     elif command -v xbps-install >/dev/null 2>&1; then
         run_native
     else

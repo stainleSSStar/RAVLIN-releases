@@ -13,6 +13,7 @@ A **minimal, TTY-only Linux distribution** based on [Void Linux](https://voidlin
 | Installer | `void-installer` — Void's interactive dialog-based console installer |
 | Drivers | `linux-firmware-network` (wifi+ethernet blobs), `sof-firmware` + `alsa-ucm-conf` + `alsa-utils` (sound) |
 | Networking | `dhcpcd` + `wpa_supplicant` (enabled by default) |
+| Sound | `alsa-utils` with the `alsa` service enabled — mixer state is saved at shutdown and restored at boot |
 | Bootloader | GRUB (BIOS + 32/64-bit EFI) |
 | Display | none — TTY only, by design |
 
@@ -29,7 +30,7 @@ bash build.sh
 ```
 
 - On a **Void host**, the build runs natively.
-- Anywhere else (macOS, other Linux, CI), it automatically runs inside the official `ghcr.io/void-linux/void-glibc` container (`--privileged`, required by mklive).
+- Anywhere else (macOS, other Linux, CI), it automatically runs inside the official `ghcr.io/void-linux/void-glibc` container (`--privileged`, required by mklive). The build script is Bash 3.2 compatible, so macOS's bundled shell can drive it; only the container itself needs bash, which the entrypoint installs on demand.
 
 Output: `ravlin-live-x86_64-0.1.0.iso`.
 
@@ -58,9 +59,9 @@ Every release ships the ISO plus a `sha256sum.txt`. By default releases land on 
 
 Every build is gated on three QEMU jobs (software emulation — the runners have no KVM), all booting the actual ISO artifacts:
 
-- **BIOS boot** — the ISO boots through its own bootloader chain (SeaBIOS → ISOLINUX → kernel), then over the serial console CI verifies: fish login shell with the RAVLIN config, `void-installer` present, RAVLIN `os-release`, `dhcpcd`/`wpa_supplicant` *running* (`sv status`, not just enabled), and the ALSA stack detecting an emulated sound card (`aplay -l`).
+- **BIOS boot** — the ISO boots through its own bootloader chain (SeaBIOS → ISOLINUX → kernel), then over the serial console CI verifies: fish login shell with the RAVLIN config, `void-installer` present, RAVLIN `os-release`, `dhcpcd`/`wpa_supplicant` *running* (`sv status`, not just enabled), the ALSA stack detecting an emulated sound card (`aplay -l`), and the live hostname (`ravlin`, set by the patched vmklive boot hook).
 - **UEFI boot** — the same ISO boots through the EFI chain (OVMF → GRUB EFI → kernel) to a working live session.
-- **Install test** — the installation users actually perform: CI boots the live ISO, then drives the *real interactive `void-installer`* through its dialog menus (root password, bootloader, ext4 on `/`, **Local** source) onto a blank disk. The disk then boots through its own GRUB and the installed system is verified (fish, identity, services running, package set).
+- **Install test** — the installation users actually perform: CI boots the live ISO, then drives the *real interactive `void-installer`* through its dialog menus (root password, bootloader, ext4 on `/`, **Local** source) onto a blank disk. The disk then boots through its own GRUB and the installed system is verified (fish, identity, services running, alsa service, package set) — including a *forced `base-files` reinstall* to prove the RAVLIN `os-release` survives package updates (the `preserve=` pattern in `/etc/xbps.d/49-ravlin-preserve.conf`).
 
 Honest limits: tests run on emulated hardware (virtio disk/NIC, emulated HDA audio), so physical wifi radios, speakers and exotic firmware remain untested by CI. A serial console is enabled on the installed *test* system (test plumbing in `ci/postinstall-chroot.sh`) purely so the boot test can observe it — the installation itself is untouched.
 
@@ -72,7 +73,8 @@ Honest limits: tests run on emulated hardware (virtio disk/NIC, emulated HDA aud
 ├── postsetup.sh          # mklive hook: registers fish, sets root's shell
 ├── rootfs/               # overlay copied into the live image (-I)
 │   ├── etc/
-│   │   ├── os-release    # RAVLIN identity (survives updates & install)
+│   │   ├── os-release    # RAVLIN identity
+│   │   ├── xbps.d/49-ravlin-preserve.conf  # keep os-release across base-files updates
 │   │   ├── issue, motd   # live session branding & instructions
 │   │   ├── shells        # valid login shells
 │   │   ├── hostname      # default hostname: ravlin
@@ -135,7 +137,9 @@ sudo xbps-remove <pkg>
 - **bash stays installed.** Removing it breaks virtually every system script. fish is the *default shell* (login shell of root and new users), not the only binary on disk.
 - **No sudo alternative added.** `base-system` ships sudo already; nothing extra needed.
 - **Firmware scope.** Network (wifi+ethernet) and sound firmware are included per the distro's goals. For full blobs (AMD/Intel/NVIDIA GPU microcode etc.) add `linux-firmware` to `packages.txt`. CPU microcode (`intel-ucode` / `amd-ucode`) is a reasonable optional addition.
-- **os-release branding persists.** Void's `/etc/os-release` is a symlink to `/usr/lib/os-release`; the overlay replaces it with a regular file, so package updates don't clobber it.
+- **os-release branding persists — explicitly.** Void's `/etc/os-release` is a symlink owned by `base-files`; the overlay replaces it with a regular file, and xbps removes a type-mismatched file during unpacking, so an update or reinstall of `base-files` would restore Void's identity. `/etc/xbps.d/49-ravlin-preserve.conf` (also part of the overlay, so it lands on installed systems too) tells xbps to preserve the path; CI proves it with a forced `base-files` reinstall.
+- **Live hostname is ravlin.** void-mklive's vmklive dracut hook rewrites `/etc/hostname` to `void-live` on every live boot (which the local-copy install would then inherit); the build patches that hook in the pinned checkout so the machine is called `ravlin` on the live image and after installation.
+- **ALSA service enabled.** `alsa` is part of the enabled service set, so `alsamixer` changes are saved at shutdown and restored on the next boot.
 
 ## Roadmap
 

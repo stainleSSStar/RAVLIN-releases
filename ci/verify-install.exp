@@ -14,7 +14,10 @@
 #   4. the system is booted from the disk, not the ISO
 #   5. RAVLIN identity on the installed system
 #   6. dhcpcd and wpa_supplicant are running (sv status), not just enabled
-#   7. the RAVLIN package set (sound tooling) made it onto the disk
+#   7. the alsa service is running (mixer state save/restore)
+#   8. the RAVLIN package set (sound tooling) made it onto the disk
+#   9. the RAVLIN os-release survives a forced base-files reinstall
+#      (xbps preserve= pattern in /etc/xbps.d)
 #
 # fish wraps command echoes in ANSI escapes; only contiguous output
 # substrings are matched.
@@ -60,7 +63,7 @@ expect {
     timeout { puts "\n=== CHECK 5 FAILED: os-release wrong ==="; exit 1 }
 }
 
-# service health: runit must be supervising them and they must be running
+# 6. dhcpcd and wpa_supplicant are running (sv status), not just enabled
 send "sv status dhcpcd wpa_supplicant\r"
 expect {
     "run: dhcpcd" { puts "\n=== CHECK 6 PASSED: dhcpcd running ===" }
@@ -71,10 +74,37 @@ expect {
     timeout { puts "\n=== CHECK 6b FAILED: wpa_supplicant not running ==="; exit 1 }
 }
 
+# 7. the alsa service is enabled and running (mixer state save/restore)
+send "sv status alsa\r"
+expect {
+    "run: alsa" { puts "\n=== CHECK 7 PASSED: alsa service running ===" }
+    timeout { puts "\n=== CHECK 7 FAILED: alsa service not running ==="; exit 1 }
+}
+
 send "command -v alsamixer\r"
 expect {
-    "/usr/bin/alsamixer" { puts "\n=== CHECK 7 PASSED: sound tooling installed ===" }
-    timeout { puts "\n=== CHECK 7 FAILED: tooling missing ==="; exit 1 }
+    "/usr/bin/alsamixer" { puts "\n=== CHECK 8 PASSED: sound tooling installed ===" }
+    timeout { puts "\n=== CHECK 8 FAILED: tooling missing ==="; exit 1 }
+}
+
+# 9. RAVLIN identity survives a base-files update: xbps would replace our
+# regular /etc/os-release with Void's symlink (type-mismatch removal in
+# lib/package_unpack.c) unless the preserve pattern in
+# /etc/xbps.d/49-ravlin-preserve.conf skips the path. Force a reinstall
+# of base-files and re-check the identity afterwards.
+#
+# The success marker is assembled from split tokens (string join) so it
+# never appears contiguously in the terminal echo of the typed command.
+set timeout 600
+send "xbps-install -Syf base-files; and string join '' RAVLIN_ BASEFILES_ _OK\r"
+expect {
+    "RAVLIN_BASEFILES_OK" { puts "\n=== CHECK 9 PASSED: base-files reinstalled ===" }
+    timeout { puts "\n=== CHECK 9 FAILED: base-files reinstall did not complete ==="; exit 1 }
+}
+send "grep PRETTY /etc/os-release\r"
+expect {
+    "RAVLIN 0.1.0" { puts "\n=== CHECK 9b PASSED: os-release survived the base-files reinstall ===" }
+    timeout { puts "\n=== CHECK 9b FAILED: os-release was clobbered by base-files ==="; exit 1 }
 }
 
 puts "\n=== ALL INSTALL CHECKS PASSED ==="

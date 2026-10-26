@@ -42,7 +42,10 @@ jobs:
         run: xbps-install -Syu xbps && xbps-install -yu
 
       - name: Checkout RAVLIN
-        uses: classabbyamp/treeless-checkout-action@v1
+        # authenticated checkout: this repository can be private, and the
+        # treeless-checkout action clones over unauthenticated HTTPS,
+        # which cannot read a private repo on a fresh runner
+        uses: actions/checkout@v4
 
       - name: Build ISO
         run: bash build.sh --native

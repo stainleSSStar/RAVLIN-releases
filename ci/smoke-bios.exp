@@ -17,6 +17,7 @@
 #   6. dhcpcd and wpa_supplicant are actually running (sv status), not
 #      merely enabled
 #   7. ALSA detects the emulated sound card (aplay -l)
+#   8. the live hostname is ravlin (the patched vmklive boot hook)
 #
 # fish wraps command echoes in ANSI escapes; only contiguous output
 # substrings are matched.
@@ -79,6 +80,14 @@ send "aplay -l\r"
 expect {
     "card 0" { puts "\n=== CHECK 7 PASSED: ALSA sees the sound card ===" }
     timeout { puts "\n=== CHECK 7 FAILED: no sound card detected ==="; exit 1 }
+}
+
+# the patched live hostname hook must have named the machine ravlin
+# (upstream vmklive rewrites /etc/hostname to void-live at every boot)
+send "hostname\r"
+expect {
+    "ravlin" { puts "\n=== CHECK 8 PASSED: live hostname is ravlin ===" }
+    timeout { puts "\n=== CHECK 8 FAILED: live hostname is not ravlin ==="; exit 1 }
 }
 
 puts "\n=== ALL BIOS BOOT CHECKS PASSED ==="

@@ -48,6 +48,13 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Build ISO
+        env:
+          # repo-default.voidlinux.org has been resetting TLS connections
+          # from GitHub runner IPs ("SSL_connect returned 5 / Operation
+          # not permitted" during the xbps reposync), which stalls builds
+          # for hours. Use Void's own CI mirror instead — the same one
+          # void-mklive's GitHub workflows sync from on these runners.
+          RAVLIN_MIRROR: https://repo-ci.voidlinux.org/current
         run: bash build.sh --native
 
       - name: Compute checksums

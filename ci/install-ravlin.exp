@@ -75,6 +75,14 @@ send "ravlin-ci\r"
 await "Enter the root password again"
 send "ravlin-ci\r"
 
+# Hostname: the installer always writes /etc/hostname and defaults to
+# "void" when this menu was never used, which would clobber the ravlin
+# hostname the live image sets. Enter it explicitly through the menu.
+await "installation menu"
+send "H\r"
+await "Set the machine hostname:"
+send "ravlin\r"
+
 # Bootloader: /dev/vda is the first (and only) disk entry; graphical
 # terminal for GRUB: yes
 await "installation menu"

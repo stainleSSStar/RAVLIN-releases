@@ -95,8 +95,10 @@ expect {
 #
 # The success marker is assembled from split tokens (string join) so it
 # never appears contiguously in the terminal echo of the typed command.
+# Note the token split: RAVLIN_ + BASEFILES + _OK joins to the single
+# underscore form RAVLIN_BASEFILES_OK the expect pattern below matches.
 set timeout 600
-send "xbps-install -Syf base-files; and string join '' RAVLIN_ BASEFILES_ _OK\r"
+send "xbps-install -Syf base-files; and string join '' RAVLIN_ BASEFILES _OK\r"
 expect {
     "RAVLIN_BASEFILES_OK" { puts "\n=== CHECK 9 PASSED: base-files reinstalled ===" }
     timeout { puts "\n=== CHECK 9 FAILED: base-files reinstall did not complete ==="; exit 1 }
@@ -105,6 +107,15 @@ send "grep PRETTY /etc/os-release\r"
 expect {
     "RAVLIN 0.1.0" { puts "\n=== CHECK 9b PASSED: os-release survived the base-files reinstall ===" }
     timeout { puts "\n=== CHECK 9b FAILED: os-release was clobbered by base-files ==="; exit 1 }
+}
+
+# 10. the installed hostname is ravlin (set through the installer's own
+# Hostname menu; its default would be "void"). The marker trick keeps the
+# echo of the typed command from matching the pattern.
+send "test (hostname) = ravlin; and string join '' HOSTNAME _OK\r"
+expect {
+    "HOSTNAME_OK" { puts "\n=== CHECK 10 PASSED: installed hostname is ravlin ===" }
+    timeout { puts "\n=== CHECK 10 FAILED: installed hostname is not ravlin ==="; exit 1 }
 }
 
 puts "\n=== ALL INSTALL CHECKS PASSED ==="

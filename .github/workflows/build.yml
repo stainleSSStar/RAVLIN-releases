@@ -91,6 +91,10 @@ jobs:
         run: |
           # azure apt mirrors on GH runners occasionally hang; fail fast at
           # the connection level, then retry the whole step
+          # azure.archive.ubuntu.com repeatedly hangs from GH runners
+          # (8+ minute stalls, failed jobs); pin the primary mirror
+          sudo sed -i 's|azure.archive.ubuntu.com|archive.ubuntu.com|g' \
+            /etc/apt/sources.list /etc/apt/sources.list.d/*.sources 2>/dev/null || true
           APT_OPTS="-o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30"
           for i in 1 2 3; do
             echo "== apt attempt $i =="
@@ -135,6 +139,10 @@ jobs:
 
       - name: Install QEMU, OVMF and expect
         run: |
+          # azure.archive.ubuntu.com repeatedly hangs from GH runners
+          # (8+ minute stalls, failed jobs); pin the primary mirror
+          sudo sed -i 's|azure.archive.ubuntu.com|archive.ubuntu.com|g' \
+            /etc/apt/sources.list /etc/apt/sources.list.d/*.sources 2>/dev/null || true
           APT_OPTS="-o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30"
           for i in 1 2 3; do
             echo "== apt attempt $i =="
@@ -178,6 +186,10 @@ jobs:
 
       - name: Install QEMU and expect
         run: |
+          # azure.archive.ubuntu.com repeatedly hangs from GH runners
+          # (8+ minute stalls, failed jobs); pin the primary mirror
+          sudo sed -i 's|azure.archive.ubuntu.com|archive.ubuntu.com|g' \
+            /etc/apt/sources.list /etc/apt/sources.list.d/*.sources 2>/dev/null || true
           APT_OPTS="-o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30"
           for i in 1 2 3; do
             echo "== apt attempt $i =="

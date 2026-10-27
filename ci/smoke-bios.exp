@@ -83,10 +83,12 @@ expect {
 }
 
 # the patched live hostname hook must have named the machine ravlin
-# (upstream vmklive rewrites /etc/hostname to void-live at every boot)
-send "hostname\r"
+# (upstream vmklive rewrites /etc/hostname to void-live at every boot).
+# The success marker only appears if the test passes, and is assembled
+# from split tokens so the typed command's echo cannot match the pattern.
+send "test (hostname) = ravlin; and string join '' HOSTNAME _OK\r"
 expect {
-    "ravlin" { puts "\n=== CHECK 8 PASSED: live hostname is ravlin ===" }
+    "HOSTNAME_OK" { puts "\n=== CHECK 8 PASSED: live hostname is ravlin ===" }
     timeout { puts "\n=== CHECK 8 FAILED: live hostname is not ravlin ==="; exit 1 }
 }
 

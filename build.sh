@@ -137,14 +137,15 @@ run_container() {
     # The official void-glibc container is intentionally minimal: its
     # recipe installs only "xbps base-files dash coreutils grep run-parts
     # sed gawk" — no bash, which this build script needs. Bootstrap with
-    # dash and install bash first if it is missing.
+    # dash and install bash first if it is missing; fail with a clear
+    # message if that is not possible.
     "$runner" run --rm --privileged \
         -e RAVLIN_ARCH="$ARCH" \
         -e RAVLIN_MIRROR="$MIRROR" \
         -e MKLIVE_REF="$MKLIVE_REF" \
         -v "$SCRIPT_DIR":/ravlin -w /ravlin \
         "$CONTAINER_IMAGE" \
-        sh -c 'command -v bash >/dev/null 2>&1 || xbps-install -Sy bash; exec bash /ravlin/build.sh --native'
+        sh -c 'command -v bash >/dev/null 2>&1 || xbps-install -Sy bash || { echo "ERROR: failed to install bash in the container (network/repository reachable?)" >&2; exit 1; }; exec bash /ravlin/build.sh --native'
 }
 
 # NOTE: run_native must never be invoked as "run_native || die ..." — the
